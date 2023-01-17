@@ -1,0 +1,64 @@
+trigger:
+- master/*
+- main/*
+
+stages:
+  - stage: 'Build'
+    jobs:
+      - job: CheckChanges
+        displayName: 'Check changes'
+        steps:
+          - bash: |
+              PATH_FILTER="master/"
+              CHANGED_FILES=$(git diff HEAD HEAD~ --name-only)
+              MATCH_COUNT=0
+
+              echo "Checking for file changes..."
+              for FILE in $CHANGED_FILES
+              do
+                if [[ $FILE == *$PATH_FILTER* ]]; then
+                  echo "MATCH:  ${FILE} changed"
+                  MATCH_COUNT=$(($MATCH_COUNT+1))
+                else
+                  echo "IGNORE: ${FILE} changed"
+                fi
+              done
+
+              echo "$MATCH_COUNT match(es) for filter '$PATH_FILTER' found."
+              if [[ $MATCH_COUNT -gt 0 ]]; then
+                echo "##vso[task.setvariable variable=SOURCE_CODE_CHANGED;isOutput=true]true"
+              else
+                echo "##vso[task.setvariable variable=SOURCE_CODE_CHANGED;isOutput=true]false"
+              fi
+            name: check_changes
+            displayName: 'Check changed files'
+
+      - job: Build       
+        displayName: 'Only when source code changed'    
+        dependsOn: CheckChanges # <- Important: Mark previous job as dependency        
+        condition: eq(dependencies.CheckChanges.outputs['check_changes.SOURCE_CODE_CHANGED'], 'true')
+        steps:
+        - script: |
+            sudo update-alternatives --set php /usr/bin/php$(phpVersion)
+            sudo update-alternatives --set phar /usr/bin/phar$(phpVersion)
+            sudo update-alternatives --set phpdbg /usr/bin/phpdbg$(phpVersion)
+            sudo update-alternatives --set php-cgi /usr/bin/php-cgi$(phpVersion)
+            sudo update-alternatives --set phar.phar /usr/bin/phar.phar$(phpVersion)
+            php -version
+          displayName: 'Use PHP version $(phpVersion)'
+
+        - script: composer install --no-interaction --prefer-dist
+          displayName: 'composer install'
+
+        - task: ArchiveFiles@2
+          inputs:
+            rootFolderOrFile: '$(Build.BinariesDirectory)'
+            includeRootFolder: true
+            archiveType: 'zip'
+            archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+            replaceExistingArchive: true
+        - task: PublishPipelineArtifact@1
+          inputs:
+            targetPath: '$(Pipeline.Workspace)'
+            artifact: 'drop'
+            publishLocation: 'pipeline'
